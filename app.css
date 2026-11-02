@@ -281,6 +281,108 @@ a.link { display: inline-block; }
 .totals strong { font-variant-numeric: tabular-nums; }
 .totals span { color: var(--muted); font-size: .76rem; }
 
+/* Workout tab */
+.eyebrow { color: var(--accent); font-size: .8rem; font-weight: 700; margin: 0 0 2px; }
+.card.highlight { border-color: var(--accent); }
+.card.list.spaced { margin-top: 12px; }
+.week-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 10px; }
+.week-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 6px 0;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: .72rem;
+}
+.week-day strong { font-size: .95rem; color: var(--muted); font-weight: 600; }
+.week-day.planned strong { color: var(--text); font-weight: 700; }
+.week-day.done strong { color: var(--accent); }
+.week-day.today { border-color: var(--accent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+.plan-line { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); font-size: .94rem; }
+.plan-line:first-of-type { margin-top: 8px; }
+.other-workouts { margin-top: 14px; }
+.other-workouts .hint { margin-bottom: 6px; }
+.button-row.tight { margin-top: 0; }
+.button:disabled { opacity: .45; }
+
+/* Workout session */
+.session-screen { padding-bottom: calc(env(safe-area-inset-bottom) + 96px); }
+.exercise-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.link.small { font-size: .85rem; padding: 6px 0; min-height: 32px; }
+.target { font-size: .88rem; font-weight: 600; margin: 2px 0 6px; }
+.cues { margin: 0 0 6px; padding-left: 18px; color: var(--muted); font-size: .84rem; }
+.small-text { font-size: .82rem; margin: 4px 0; }
+.advice { border-radius: 10px; padding: 8px 10px; font-size: .84rem; margin: 8px 0; background: var(--surface-2); }
+.advice.up { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+
+.set-grid { display: grid; grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr) 58px 46px; gap: 6px; align-items: center; margin-top: 6px; }
+.set-head { color: var(--muted); font-size: .74rem; font-weight: 600; text-align: center; margin-top: 10px; }
+.set-number { text-align: center; color: var(--muted); font-size: .9rem; font-variant-numeric: tabular-nums; }
+.set-grid input, .set-grid select {
+  width: 100%;
+  min-height: 46px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  text-align: center;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+.set-grid select { padding: 6px 2px; }
+.check {
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.set-grid.done .check { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.set-grid.done input, .set-grid.done select { border-color: var(--accent); }
+.exercise-actions { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; }
+
+.rest-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px calc(env(safe-area-inset-bottom) + 10px);
+  background: var(--surface);
+  border-top: 2px solid var(--accent);
+  z-index: 10;
+}
+.rest-bar.over { background: var(--accent); color: var(--accent-text); }
+.rest-bar .button { color: var(--text); }
+.rest-time { flex: 1; display: flex; align-items: baseline; gap: 8px; }
+.rest-time strong { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+
+/* Program editor */
+.day-picker { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 10px; }
+.day-picker button {
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  font-size: .78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.day-picker button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.program-card { padding-bottom: 4px; }
+.program-card h2 { padding-bottom: 8px; }
+
 /* Bottom navigation */
 .tabbar {
   position: fixed;

@@ -16,6 +16,9 @@ A personal food and workout tracker that installs on an Android phone as a web a
 - `js/nutrition.js`: target calculations, totals and dates
 - `js/foodApi.js`: food search
 - `js/db.js`: on-phone database, backup and restore
+- `js/exercises.js`: built-in exercises and the starter program
+- `js/workout.js`: schedule rotation and weight progression
+- `js/workoutScreen.js`: Workout tab behavior
 - `sw.js`: offline support
 - `tests/tests.html`: open in a browser to run the tests
 

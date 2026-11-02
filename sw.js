@@ -1,6 +1,6 @@
 // Offline support. Keeps a copy of the app's own files on the phone.
 // Change CACHE_VERSION whenever any app file changes, or phones won't pick up the update.
-const CACHE_VERSION = 'fitness-tracker-v1';
+const CACHE_VERSION = 'fitness-tracker-v5';
 
 const APP_FILES = [
   './',
@@ -9,8 +9,11 @@ const APP_FILES = [
   'manifest.webmanifest',
   'js/app.js',
   'js/db.js',
+  'js/exercises.js',
   'js/foodApi.js',
   'js/nutrition.js',
+  'js/workout.js',
+  'js/workoutScreen.js',
   'lib/alpine.min.js',
   'lib/dexie.min.js',
   'icons/icon-192.png',

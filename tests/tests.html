@@ -12,6 +12,8 @@
   <script src="../lib/dexie.min.js"></script>
   <script src="../js/nutrition.js"></script>
   <script src="../js/foodApi.js"></script>
+  <script src="../js/exercises.js"></script>
+  <script src="../js/workout.js"></script>
   <script>
     // Uses a throwaway database name so tests never touch real data.
     const realDexie = Dexie;
@@ -97,6 +99,74 @@
     check('entry totals scale by portion and amount', entryTotals(entry).kcal === 300 && entryTotals(entry).protein === 30);
     check('summing an empty day gives 0', sumEntries([]).kcal === 0);
 
+    // --- Starter program ---
+    const workoutIds = (w) => w.exercises.map((x) => x.exerciseId).join();
+    check('Workout A matches the plan', workoutIds(STARTER_WORKOUTS[0]) === 'goblet-squat,db-bench,one-arm-row,db-rdl');
+    check('Workout B matches the plan', workoutIds(STARTER_WORKOUTS[1]) === 'barbell-rdl,db-ohp,lat-pulldown,db-split-squat');
+    check('every program exercise exists', STARTER_WORKOUTS.every((w) => w.exercises.every((x) => EXERCISES.some((e) => e.id === x.exerciseId))));
+    check('exercise ids are unique', new Set(EXERCISES.map((e) => e.id)).size === EXERCISES.length);
+    check('every built-in has 1 or 2 cues', EXERCISES.every((e) => e.cues.length >= 1 && e.cues.length <= 2));
+
+    // --- Schedule. 2026-11-02 is a Monday. ---
+    const weekOf = (monday, schedule) => weekDates(monday).map((d) => {
+      const i = rotationIndex(d.date, schedule, 2);
+      return i === null ? '-' : 'AB'[i];
+    }).join('');
+    const threeDays = makeSchedule([0, 2, 4], '2026-11-01');
+    check('Sunday setup makes Monday the first day', threeDays.anchor === '2026-11-02');
+    check('week 1 is A/B/A', weekOf('2026-11-02', threeDays) === 'A-B-A--');
+    check('week 2 is B/A/B', weekOf('2026-11-09', threeDays) === 'B-A-B--');
+    check('week 3 is A/B/A again', weekOf('2026-11-16', threeDays) === 'A-B-A--');
+    check('earlier weeks work without errors', weekOf('2026-10-26', threeDays) === 'B-A-B--');
+    const midWeek = makeSchedule([0, 2, 4], '2026-11-03');
+    check('joining midweek starts on the next day with A', midWeek.anchor === '2026-11-04' && rotationIndex('2026-11-04', midWeek, 2) === 0);
+    const twoDays = makeSchedule([3, 0], '2026-11-01');
+    check('2 days a week alternates', weekOf('2026-11-02', twoDays) === 'A--B---' && weekOf('2026-11-09', twoDays) === 'A--B---');
+    check('startIndex shifts the rotation', rotationIndex('2026-11-02', makeSchedule([0, 2, 4], '2026-11-01', 1), 2) === 1);
+    check('schedule survives the clock change', rotationIndex('2026-03-09', makeSchedule([0, 2, 4], '2026-03-02'), 2) === 1);
+
+    // --- Progression ---
+    const plan = { sets: 3, repMin: 8, repMax: 10 };
+    const sets = (weight, ...reps) => reps.map((r) => ({ weight, reps: r }));
+    const up = progressionAdvice(sets(35, 10, 10, 10), plan, 'dumbbell', 'lb');
+    check('top of range on every set means go up', up.status === 'up' && up.suggestedWeight === 40);
+    check('dumbbell prompt says next size', up.message.includes('next dumbbell size'));
+    check('barbell goes up 5 lb', progressionAdvice(sets(95, 10, 10, 10), plan, 'barbell', 'lb').suggestedWeight === 100);
+    check('barbell press goes up 2.5 lb', progressionAdvice(sets(95, 10, 10, 10), plan, 'barbellPress', 'lb').suggestedWeight === 97.5);
+    check('kg steps are used in kg', progressionAdvice(sets(20, 10, 10, 10), plan, 'dumbbell', 'kg').suggestedWeight === 22);
+    check('one set short of the top means build', progressionAdvice(sets(35, 10, 10, 9), plan, 'dumbbell', 'lb').status === 'build');
+    check('below the range means stay', progressionAdvice(sets(35, 10, 8, 7), plan, 'dumbbell', 'lb').status === 'stay');
+    check('skipped sets do not count as ready', progressionAdvice(sets(35, 10, 10), plan, 'dumbbell', 'lb').status === 'build');
+    check('mixed weights do not count as ready', progressionAdvice([...sets(35, 10, 10), ...sets(30, 10)], plan, 'dumbbell', 'lb').status === 'build');
+    check('no history means no advice', progressionAdvice([], plan, 'dumbbell', 'lb') === null);
+    check('bodyweight suggests no weight', progressionAdvice(sets('', 10, 10, 10), plan, 'bodyweight', 'lb').suggestedWeight === undefined);
+
+    // --- Previous sets and building a session ---
+    const doneSet = (weight, reps) => ({ weight, reps, rpe: '', done: true });
+    const history = [
+      { status: 'done', date: '2026-11-02', startedAt: 1, unit: 'lb', items: [{ exerciseId: 'db-bench', kind: 'dumbbell', sets: [doneSet(30, 10)] }] },
+      { status: 'done', date: '2026-11-04', startedAt: 2, unit: 'lb', items: [{ exerciseId: 'db-bench', kind: 'dumbbell', sets: [doneSet(35, 9), { weight: 35, reps: '', rpe: '', done: false }] }] },
+      { status: 'active', date: '2026-11-06', startedAt: 3, unit: 'lb', items: [{ exerciseId: 'db-bench', kind: 'dumbbell', sets: [doneSet(99, 9)] }] },
+    ];
+    const previous = findPreviousSets('db-bench', history, 'lb');
+    check('uses the most recent finished session', previous.date === '2026-11-04' && previous.sets[0].weight === 35);
+    check('unticked sets are ignored', previous.sets.length === 1);
+    check('exercises never done give nothing', findPreviousSets('plank', history, 'lb') === null);
+    check('previous weights convert units', findPreviousSets('db-bench', history, 'kg').sets[0].weight === 16);
+    const bench = EXERCISES.find((e) => e.id === 'db-bench');
+    const row = { sets: 3, repMin: 6, repMax: 10, restSec: 120 };
+    const firstTime = buildSessionItem(bench, row, null, 'lb');
+    check('first time starts empty', firstTime.sets.length === 3 && firstTime.sets[0].weight === '' && firstTime.advice === null);
+    const again = buildSessionItem(bench, row, { date: '2026-11-04', sets: sets(35, 9, 8, 8) }, 'lb');
+    check('weight fills in from last time', again.sets.every((s) => s.weight === 35) && again.sets[0].reps === '');
+    const ready = buildSessionItem(bench, row, { date: '2026-11-04', sets: sets(35, 10, 10, 10) }, 'lb');
+    check('going up fills in the new weight', ready.sets.every((s) => s.weight === 40));
+    check('logged sets need reps', !isLoggedSet({ done: true, reps: '', weight: 30 }, 'dumbbell'));
+    check('logged sets need ticking', !isLoggedSet({ done: false, reps: 5, weight: 30 }, 'dumbbell'));
+    check('bodyweight sets need no weight', isLoggedSet({ done: true, reps: 5, weight: '' }, 'bodyweight'));
+    check('previous sets read clearly', formatPreviousSets(sets(35, 10, 9), 'lb', 'dumbbell') === '35 lb × 10, 9');
+    check('rest time format', formatRestTime(90) === '1:30' && formatRestTime(0.2) === '0:01' && formatRestTime(-5) === '0:00');
+
     // --- Backup and restore ---
     (async () => {
       // --- Search retries, using a stand-in for the network ---
@@ -161,6 +231,37 @@
       let refused = false;
       try { await restoreBackup(damaged); } catch { refused = true; }
       check('a damaged restore changes nothing', refused && (await db.entries.count()) === 1);
+
+      // --- Workout data in backups ---
+      await ensureProgram();
+      check('starter program is added once', (await db.workouts.count()) === 2);
+      await db.workouts.update('A', { name: 'Edited A' });
+      await ensureProgram();
+      check('your program edits are not overwritten', (await db.workouts.get('A')).name === 'Edited A');
+      await db.sessions.add({ date: '2026-11-02', status: 'done', unit: 'lb', startedAt: 1, workoutId: 'A', workoutName: 'Workout A', items: [{ exerciseId: 'db-bench', name: 'Bench', kind: 'dumbbell', sets: [{ weight: 30, reps: 10, rpe: '8', done: true }] }] });
+      await db.cardio.add({ date: '2026-11-03', type: 'Walk', minutes: 30, distance: null, distanceUnit: 'mi', createdAt: 1 });
+      await db.exercises.put({ id: 'custom-1', name: 'My lift', kind: 'machine', group: 'Your exercises', cues: [] });
+      const fullBackup = JSON.parse(JSON.stringify(await createBackup()));
+      check('backups include workouts', fullBackup.data.sessions.length === 1 && fullBackup.data.cardio.length === 1 && fullBackup.data.exercises.length === 1);
+      await Promise.all([db.sessions.clear(), db.cardio.clear(), db.exercises.clear(), db.workouts.clear()]);
+      await restoreBackup(fullBackup);
+      check('workouts come back after restore', (await db.sessions.toArray())[0].items[0].sets[0].reps === 10);
+      check('cardio and custom exercises come back', (await db.cardio.count()) === 1 && (await db.exercises.count()) === 1);
+      check('edited program comes back', (await db.workouts.get('A')).name === 'Edited A');
+
+      const stage1Backup = JSON.parse(JSON.stringify(fullBackup));
+      stage1Backup.schemaVersion = 1;
+      ['exercises', 'workouts', 'sessions', 'cardio'].forEach((table) => { delete stage1Backup.data[table]; });
+      stage1Backup.data.settings = stage1Backup.data.settings.filter((s) => s.key !== 'schedule');
+      check('Stage 1 backups are still accepted', validateBackup(stage1Backup).sessions === 0);
+      await restoreBackup(stage1Backup);
+      check('food data comes back from a Stage 1 backup', (await db.entries.count()) === 1);
+      await ensureProgram();
+      check('program is added after a Stage 1 restore', (await db.workouts.count()) === 2 && !!(await getSetting('schedule')));
+
+      const badSession = JSON.parse(JSON.stringify(fullBackup));
+      badSession.data.sessions[0].items = 'nope';
+      check('damaged workouts are rejected', throws(badSession));
 
       await db.delete();
       render();

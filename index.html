@@ -14,7 +14,10 @@
   <script defer src="lib/dexie.min.js"></script>
   <script defer src="js/nutrition.js"></script>
   <script defer src="js/foodApi.js"></script>
+  <script defer src="js/exercises.js"></script>
+  <script defer src="js/workout.js"></script>
   <script defer src="js/db.js"></script>
+  <script defer src="js/workoutScreen.js"></script>
   <script defer src="js/app.js"></script>
   <script defer src="lib/alpine.min.js"></script>
 </head>
@@ -194,6 +197,84 @@
       </template>
     </main>
 
+    <main class="screen with-nav" x-show="tab === 'workout'">
+      <h1>Workout</h1>
+
+      <div class="week-strip" aria-label="This week">
+        <template x-for="day in weekStrip" :key="day.date">
+          <div class="week-day" :class="{ today: day.today, done: day.done, planned: !!day.short }">
+            <span x-text="day.label"></span>
+            <strong x-text="day.done ? '✓' : (day.short || '·')"></strong>
+          </div>
+        </template>
+      </div>
+
+      <template x-if="activeSession">
+        <section class="card highlight">
+          <h2>Workout in progress</h2>
+          <p class="muted" x-text="`${activeSession.workoutName}, started ${shortDate(activeSession.date)}`"></p>
+          <button class="button primary wide" type="button" @click="openSession(activeSession)">Resume workout</button>
+        </section>
+      </template>
+
+      <template x-if="!activeSession">
+        <section class="card">
+          <template x-if="todaysFinishedSessions.length">
+            <div>
+              <h2>Done for today</h2>
+              <p class="muted" x-text="`${todaysFinishedSessions[0].workoutName} is logged. ${nextPlanLabel}`"></p>
+            </div>
+          </template>
+          <template x-if="!todaysFinishedSessions.length && todaysPlan">
+            <div>
+              <p class="eyebrow">Today</p>
+              <h2 x-text="todaysPlan.name"></h2>
+              <template x-for="row in todaysPlan.exercises" :key="row.exerciseId">
+                <div class="plan-line">
+                  <span x-text="exerciseName(row.exerciseId)"></span>
+                  <span class="muted" x-text="`${row.sets} × ${formatRepRange(row.repMin, row.repMax)}`"></span>
+                </div>
+              </template>
+              <button class="button primary wide" type="button" @click="startWorkout(todaysPlan)" x-text="`Start ${todaysPlan.name}`"></button>
+            </div>
+          </template>
+          <template x-if="!todaysFinishedSessions.length && !todaysPlan">
+            <div>
+              <h2>Rest day</h2>
+              <p class="muted" x-text="nextPlanLabel"></p>
+            </div>
+          </template>
+          <div class="other-workouts">
+            <p class="hint" x-text="todaysPlan && !todaysFinishedSessions.length ? 'Or do this instead:' : 'Train anyway:'"></p>
+            <div class="button-row tight">
+              <template x-for="workout in (todaysFinishedSessions.length ? workouts : alternateWorkouts)" :key="workout.id">
+                <button class="button" type="button" @click="startWorkout(workout)" x-text="workout.name"></button>
+              </template>
+            </div>
+          </div>
+        </section>
+      </template>
+
+      <div class="button-row">
+        <button class="button" type="button" @click="openCardio()">+ Log cardio</button>
+        <button class="button" type="button" @click="openSheet('program')">Edit program</button>
+      </div>
+
+      <h3>History</h3>
+      <div class="card list" x-show="historyRows.length">
+        <template x-for="row in historyRows" :key="row.key">
+          <button class="row" type="button" @click="openHistoryRow(row)">
+            <span class="row-main">
+              <strong x-text="row.title"></strong>
+              <span class="muted" x-text="row.detail"></span>
+            </span>
+            <span class="muted" x-text="shortDate(row.date)"></span>
+          </button>
+        </template>
+      </div>
+      <p class="muted" x-show="!historyRows.length">Your finished workouts and cardio will appear here.</p>
+    </main>
+
     <main class="screen with-nav" x-show="tab === 'settings'">
       <h1>Settings</h1>
 
@@ -248,6 +329,7 @@
 
     <nav class="tabbar" aria-label="Main">
       <button type="button" :class="{ on: tab === 'diary' }" @click="tab = 'diary'">Diary</button>
+      <button type="button" :class="{ on: tab === 'workout' }" @click="tab = 'workout'">Workout</button>
       <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">Settings</button>
     </nav>
   </div>
@@ -409,12 +491,226 @@
     <button class="button primary wide" type="button" @click="saveTargetForm()">Save targets</button>
   </main>
 
+  <!-- ==================== Workout session ==================== -->
+  <main class="screen session-screen" x-show="sheet === 'session'">
+    <template x-if="session">
+      <div>
+        <header class="sheet-header">
+          <button class="icon-button" type="button" aria-label="Back" @click="leaveSession()">‹</button>
+          <h2 x-text="session.workoutName"></h2>
+        </header>
+        <template x-if="session.status === 'done'">
+          <label class="field">Date
+            <input type="date" x-model="session.date" @change="saveSession()">
+          </label>
+        </template>
+        <p class="hint" x-show="session.status === 'active'">Tick each set as you finish it. The screen stays on and your sets save as you go.</p>
+
+        <template x-for="(item, itemIndex) in session.items" :key="item.uid">
+          <section class="card exercise">
+            <header class="exercise-header">
+              <h2 x-text="item.name"></h2>
+              <a class="link small" :href="demoLink(item)" target="_blank" rel="noopener">Demo</a>
+            </header>
+            <p class="target" x-text="targetLabel(item)"></p>
+            <ul class="cues" x-show="item.cues.length">
+              <template x-for="cue in item.cues" :key="cue"><li x-text="cue"></li></template>
+            </ul>
+            <p class="muted small-text" x-show="!!item.previous" x-text="previousLabel(item)"></p>
+            <template x-if="item.advice && session.status === 'active'">
+              <p class="advice" :class="item.advice.status" x-text="item.advice.message"></p>
+            </template>
+
+            <div class="set-grid set-head" aria-hidden="true">
+              <span>Set</span>
+              <span x-text="item.kind === 'bodyweight' ? '' : session.unit"></span>
+              <span>Reps</span>
+              <span>RPE</span>
+              <span></span>
+            </div>
+            <template x-for="(set, setIndex) in item.sets" :key="setIndex">
+              <div class="set-grid" :class="{ done: set.done }">
+                <span class="set-number" x-text="setIndex + 1"></span>
+                <input type="number" inputmode="decimal" step="any" min="0" :aria-label="`Set ${setIndex + 1} weight`" x-model.number="set.weight" x-show="item.kind !== 'bodyweight'" @input="saveSession()">
+                <span x-show="item.kind === 'bodyweight'"></span>
+                <input type="number" inputmode="numeric" min="0" :placeholder="item.repMax" :aria-label="`Set ${setIndex + 1} reps`" x-model.number="set.reps" @input="saveSession()">
+                <select :aria-label="`Set ${setIndex + 1} effort, optional`" x-model="set.rpe" @change="saveSession()">
+                  <option value="">–</option>
+                  <template x-for="value in ['6', '7', '8', '9', '10']" :key="value">
+                    <option :value="value" :selected="value === String(set.rpe)" x-text="value"></option>
+                  </template>
+                </select>
+                <button class="check" type="button" :aria-label="`Tick set ${setIndex + 1}`" :aria-pressed="!!set.done" @click="toggleSet(item, set, setIndex)">✓</button>
+              </div>
+            </template>
+            <p class="error" x-show="!!item.error" x-text="item.error"></p>
+            <div class="exercise-actions">
+              <button class="link small" type="button" @click="addSet(item)">+ Set</button>
+              <button class="link small" type="button" x-show="item.sets.length > 1" @click="removeLastSet(item)">− Set</button>
+              <button class="link small" type="button" @click="openPicker('session-swap', { itemIndex })">Swap</button>
+              <button class="link small" type="button" @click="removeItem(itemIndex)">Remove</button>
+            </div>
+          </section>
+        </template>
+
+        <button class="button wide" type="button" @click="openPicker('session-add')">+ Add exercise</button>
+        <button class="button primary wide" type="button" x-show="session.status === 'active'" @click="finishSession()">Finish workout</button>
+        <button class="button primary wide" type="button" x-show="session.status === 'done'" @click="leaveSession()">Done</button>
+        <button class="button danger wide" type="button" @click="discardSession()" x-text="session.status === 'done' ? 'Delete workout' : 'Discard workout'"></button>
+      </div>
+    </template>
+  </main>
+
+  <div class="rest-bar" :class="{ over: restOver }" role="timer" x-show="restVisible">
+    <div class="rest-time">
+      <span class="muted" x-show="!restOver">Rest</span>
+      <strong x-text="restLabel"></strong>
+    </div>
+    <button class="button" type="button" x-show="!restOver" @click="addRest(30)">+30s</button>
+    <button class="button" type="button" @click="stopRest()" x-text="restOver ? 'OK' : 'Skip'"></button>
+  </div>
+
+  <!-- ==================== Choose an exercise ==================== -->
+  <main class="screen" x-show="sheet === 'picker'">
+    <header class="sheet-header">
+      <button class="icon-button" type="button" aria-label="Back" @click="closeSheet()">‹</button>
+      <h2>Choose an exercise</h2>
+    </header>
+    <div class="search">
+      <input type="search" placeholder="Search exercises" aria-label="Search exercises" x-model="picker.query">
+    </div>
+    <button class="button wide" type="button" @click="openNewExercise()">+ Create your own exercise</button>
+    <div class="card list spaced">
+      <template x-for="exercise in pickerExercises" :key="exercise.id">
+        <button class="row" type="button" @click="pickExercise(exercise)">
+          <span class="row-main">
+            <strong x-text="exercise.name"></strong>
+            <span class="muted" x-text="exercise.group"></span>
+          </span>
+        </button>
+      </template>
+    </div>
+    <p class="muted center" x-show="!pickerExercises.length">No matches. You can create this exercise above.</p>
+  </main>
+
+  <main class="screen" x-show="sheet === 'newExercise'">
+    <header class="sheet-header">
+      <button class="icon-button" type="button" aria-label="Back" @click="closeSheet()">‹</button>
+      <h2>Create exercise</h2>
+    </header>
+    <label class="field">Name<input type="text" x-model="newExercise.name"></label>
+    <label class="field">Equipment
+      <select x-model="newExercise.kind">
+        <template x-for="kind in EXERCISE_KINDS" :key="kind.id">
+          <option :value="kind.id" :selected="kind.id === newExercise.kind" x-text="kind.label"></option>
+        </template>
+      </select>
+    </label>
+    <label class="field">Form cue (optional)<input type="text" x-model="newExercise.cue"></label>
+    <p class="error" x-show="newExercise.error" x-text="newExercise.error"></p>
+    <button class="button primary wide" type="button" @click="saveNewExercise()">Save exercise</button>
+  </main>
+
+  <!-- ==================== Program editor ==================== -->
+  <main class="screen" x-show="sheet === 'program'">
+    <header class="sheet-header">
+      <button class="icon-button" type="button" aria-label="Back" @click="closeSheet()">‹</button>
+      <h2>Edit program</h2>
+    </header>
+    <p class="muted">Changes apply to future workouts. Finished workouts stay as you logged them.</p>
+
+    <section class="card" x-show="schedule">
+      <h2>Training days</h2>
+      <div class="day-picker" role="group" aria-label="Training days">
+        <template x-for="(label, day) in WEEKDAY_LABELS" :key="label">
+          <button type="button" :class="{ on: schedule && schedule.days.includes(day) }" :aria-pressed="!!(schedule && schedule.days.includes(day))" @click="toggleScheduleDay(day)" x-text="label"></button>
+        </template>
+      </div>
+      <p class="hint">Your workouts alternate across these days, so 3 days gives A/B/A one week and B/A/B the next.</p>
+      <button class="link" type="button" @click="swapRotation()">Swap the A/B order</button>
+    </section>
+
+    <template x-for="workout in workouts" :key="workout.id">
+      <section class="card program-card">
+        <h2 x-text="workout.name"></h2>
+        <template x-for="(row, index) in workout.exercises" :key="`${row.exerciseId}-${index}`">
+          <button class="row" type="button" @click="openPlanRow(workout, index)">
+            <span class="row-main">
+              <strong x-text="exerciseName(row.exerciseId)"></strong>
+              <span class="muted" x-text="planRowLabel(row)"></span>
+            </span>
+          </button>
+        </template>
+        <button class="add-button" type="button" @click="openPicker('plan-add', { workoutId: workout.id })">+ Add exercise</button>
+      </section>
+    </template>
+  </main>
+
+  <main class="screen" x-show="sheet === 'planRow'">
+    <header class="sheet-header">
+      <button class="icon-button" type="button" aria-label="Back" @click="closeSheet()">‹</button>
+      <h2>Edit exercise</h2>
+    </header>
+    <h1 class="food-title" x-text="exerciseName(planForm.exerciseId)"></h1>
+    <button class="link" type="button" @click="openPicker('plan-swap')">Swap for another exercise</button>
+    <div class="target-grid">
+      <label class="field">Sets<input type="number" inputmode="numeric" min="1" max="10" x-model="planForm.sets"></label>
+      <label class="field">Rest (seconds)<input type="number" inputmode="numeric" min="0" max="900" x-model="planForm.restSec"></label>
+      <label class="field">Reps, low<input type="number" inputmode="numeric" min="1" x-model="planForm.repMin"></label>
+      <label class="field">Reps, high<input type="number" inputmode="numeric" min="1" x-model="planForm.repMax"></label>
+    </div>
+    <p class="error" x-show="planForm.error" x-text="planForm.error"></p>
+    <button class="button primary wide" type="button" @click="savePlanRow()">Save</button>
+    <div class="button-row">
+      <button class="button" type="button" :disabled="planForm.index === 0" @click="movePlanRow(-1)">Move up</button>
+      <button class="button" type="button" :disabled="!planFormWorkout || planForm.index === planFormWorkout.exercises.length - 1" @click="movePlanRow(1)">Move down</button>
+    </div>
+    <button class="button danger wide" type="button" @click="removePlanRow()">Remove from workout</button>
+  </main>
+
+  <!-- ==================== Cardio ==================== -->
+  <main class="screen" x-show="sheet === 'cardio'">
+    <header class="sheet-header">
+      <button class="icon-button" type="button" aria-label="Back" @click="closeSheet()">‹</button>
+      <h2 x-text="cardioForm.id ? 'Edit cardio' : 'Log cardio'"></h2>
+    </header>
+    <label class="field">Type
+      <select x-model="cardioForm.type">
+        <template x-for="type in CARDIO_TYPES" :key="type">
+          <option :value="type" :selected="type === cardioForm.type" x-text="type"></option>
+        </template>
+      </select>
+    </label>
+    <label class="field">Date<input type="date" x-model="cardioForm.date"></label>
+    <div class="target-grid">
+      <label class="field">Minutes<input type="number" inputmode="decimal" step="any" min="0" x-model="cardioForm.minutes"></label>
+      <label class="field"><span x-text="`Distance, optional (${cardioForm.distanceUnit})`"></span>
+        <input type="number" inputmode="decimal" step="any" min="0" x-model="cardioForm.distance">
+      </label>
+    </div>
+    <p class="hint">Cardio doesn’t change your calorie target.</p>
+    <p class="error" x-show="cardioForm.error" x-text="cardioForm.error"></p>
+    <button class="button primary wide" type="button" @click="saveCardio()">Save</button>
+    <button class="button danger wide" type="button" x-show="!!cardioForm.id" @click="deleteCardio()">Remove</button>
+  </main>
+
   <!-- ==================== Overlays ==================== -->
+  <div class="modal-backdrop" x-show="!!confirmDialog">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h2 id="confirm-title" x-text="confirmDialog && confirmDialog.title"></h2>
+      <p class="muted" x-text="confirmDialog && confirmDialog.message"></p>
+      <div class="button-row">
+        <button class="button" type="button" x-show="confirmDialog && confirmDialog.action !== 'OK'" @click="confirmDialog = null">Cancel</button>
+        <button class="button primary" type="button" @click="runConfirm()" x-text="confirmDialog && confirmDialog.action"></button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" x-show="pendingRestore">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title">
       <h2 id="restore-title">Replace all data on this phone?</h2>
       <template x-if="pendingRestore">
-        <p class="muted" x-text="`This backup is from ${pendingRestoreDate}, with ${pendingRestore.counts.entries} diary entries and ${pendingRestore.counts.foods} saved foods. Everything now on this phone will be replaced.`"></p>
+        <p class="muted" x-text="`This backup is from ${pendingRestoreDate}, with ${pendingRestore.counts.entries} diary entries, ${pendingRestore.counts.foods} saved foods, ${pendingRestore.counts.sessions} workouts and ${pendingRestore.counts.cardio} cardio sessions. Everything now on this phone will be replaced.`"></p>
       </template>
       <div class="button-row">
         <button class="button" type="button" @click="pendingRestore = null">Cancel</button>

@@ -1,6 +1,6 @@
 // The app's screens and behavior. index.html displays the state held here.
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 const BACKUP_REMINDER_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -30,6 +30,11 @@ function emptyCustomFood() {
 }
 
 function app() {
+  // Copies property descriptors so the Workout tab's computed values stay live rather than frozen.
+  return Object.defineProperties(diaryAndSettings(), Object.getOwnPropertyDescriptors(workoutScreen()));
+}
+
+function diaryAndSettings() {
   return {
     MEALS, ACTIVITY_LEVELS, FAT_LOSS_PACES, SOURCE_LABELS, APP_VERSION,
     ready: false,
@@ -73,6 +78,8 @@ function app() {
     todayCache: localDate(),
 
     async init() {
+      // A restarted app opens with no sheets, but the browser remembers the old history step. Clear it.
+      history.replaceState({ depth: 0 }, '');
       window.addEventListener('popstate', (e) => {
         const depth = (e.state && e.state.depth) || 0;
         if (depth < this.sheetStack.length) this.sheetStack.splice(depth);
@@ -89,12 +96,19 @@ function app() {
       });
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) this.onReturn();
+        this.syncWakeLock();
+        this.tickRest();
+      });
+      this.$watch('sheetStack.length', () => {
+        this.syncWakeLock();
+        if (!this.sheetStack.length) this.loadHistory();
       });
       this.registerServiceWorker();
 
       try {
         await this.loadSettings();
         await this.loadDay();
+        await this.loadTraining();
         this.ready = true;
       } catch (error) {
         console.error(error);
@@ -559,7 +573,7 @@ function app() {
     },
 
     get backupDue() {
-      if (!this.hasTargets || !this.entryCount) return false;
+      if (!this.hasTargets || (!this.entryCount && !this.sessions.length)) return false;
       const since = this.lastBackupAt || this.setupAt;
       return !since || Date.now() - since > BACKUP_REMINDER_DAYS * DAY_MS;
     },
@@ -621,6 +635,7 @@ function app() {
       this.date = localDate();
       this.tab = 'diary';
       await this.loadDay();
+      await this.loadTraining();
       this.showToast('Backup restored');
     },
 
