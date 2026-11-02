@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fitness Tracker tests</title>
+  <style>body { font: 15px/1.5 monospace; margin: 16px; } .fail { color: #b3261e; } .pass { color: #127a5b; }</style>
+</head>
+<body>
+  <h1 id="summary">Running…</h1>
+  <ul id="results"></ul>
+  <script src="../lib/dexie.min.js"></script>
+  <script src="../js/nutrition.js"></script>
+  <script src="../js/foodApi.js"></script>
+  <script>
+    // Uses a throwaway database name so tests never touch real data.
+    const realDexie = Dexie;
+    Dexie = class extends realDexie { constructor() { super('fitness-tracker-tests'); } };
+  </script>
+  <script src="../js/db.js"></script>
+  <script>
+    const outcomes = [];
+    function near(a, b, tolerance = 0.01) { return Math.abs(a - b) <= tolerance; }
+    function check(name, passed) { outcomes.push({ name, passed: !!passed }); }
+
+    // --- Dates ---
+    check('localDate uses local calendar day', localDate(new Date(2026, 10, 1, 23, 59)) === '2026-11-01');
+    check('addDays crosses month end', addDays('2026-11-30', 1) === '2026-12-01');
+    check('addDays crosses year end', addDays('2026-01-01', -1) === '2025-12-31');
+    check('addDays handles the clock-change weekend', addDays('2026-11-01', 1) === '2026-11-02');
+
+    // --- Unit conversion ---
+    check('feet and inches to cm', near(feetInchesToCm(5, 10), 177.8));
+    check('cm back to feet and inches', cmToFeetInches(177.8).feet === 5 && cmToFeetInches(177.8).inches === 10);
+    check('inches never round to 12', cmToFeetInches(182.6).inches < 12);
+    check('lb to kg', near(lbToKg(220.462), 100));
+
+    // --- Target suggestions ---
+    const person = { sex: 'male', kg: 90, cm: 180, age: 30, activity: 'moderate', pace: 'moderate' };
+    check('resting calories match Mifflin-St Jeor', near(restingCalories(person), 900 + 1125 - 150 + 5));
+    const suggested = suggestTargets(person);
+    check('maintenance is resting × activity', suggested.maintenance === 2910);
+    check('20% deficit', suggested.kcal === 2330);
+    check('protein is 1.8 g/kg rounded to 5', suggested.protein === 160);
+    check('fat is about 25% of calories', suggested.fat === 65);
+    check('macros add up to the calories', Math.abs(macroCalories(suggested) - suggested.kcal) <= 4);
+    const small = suggestTargets({ sex: 'female', kg: 45, cm: 150, age: 60, activity: 'low', pace: 'faster' });
+    check('suggestion never goes below the floor', small.kcal === 1200 && small.raisedToFloor);
+    const large = suggestTargets({ sex: 'male', kg: 200, cm: 180, age: 30, activity: 'low', pace: 'moderate' });
+    check('protein is capped at 40% of calories', large.protein * 4 <= large.kcal * 0.4 + 10);
+    check('carbs are never negative', large.carbs >= 0 && small.carbs >= 0);
+
+    // --- USDA ---
+    const usdaGeneral = normalizeUsdaFood({
+      fdcId: 1, description: 'Chicken breast, rotisserie', dataType: 'Survey (FNDDS)',
+      foodNutrients: [{ nutrientId: 1003, value: 28 }, { nutrientId: 1004, value: 3.5 }, { nutrientId: 1005, value: 0 }, { nutrientId: 1008, value: 144 }],
+      foodMeasures: [{ disseminationText: '1 oz, cooked', gramWeight: 28.35 }, { disseminationText: 'Quantity not specified', gramWeight: 120 }],
+    });
+    check('USDA calories read', usdaGeneral.nutrients.kcal === 144);
+    check('USDA measure becomes a portion', usdaGeneral.portions[0].label === '1 oz, cooked (28.4 g)' && near(usdaGeneral.portions[0].factor, 0.2835));
+    check('"Quantity not specified" is skipped', !usdaGeneral.portions.some((p) => p.label.includes('Quantity')));
+    check('zero carbs stays 0 and is not "missing"', usdaGeneral.nutrients.carbs === 0 && !usdaGeneral.nutrients.macrosMissing);
+    const usdaAtwater = normalizeUsdaFood({
+      fdcId: 2, description: 'Lunchmeat', foodNutrients: [{ nutrientId: 1003, value: 16 }, { nutrientId: 1004, value: 2 }, { nutrientId: 1005, value: 3 }, { nutrientId: 2047, value: 100 }],
+    });
+    check('USDA Atwater calories are used when needed', usdaAtwater.nutrients.kcal === 100);
+    const usdaBranded = normalizeUsdaFood({
+      fdcId: 3, description: 'GREEK YOGURT', brandName: 'OCEAN SPRAY', servingSize: 30, servingSizeUnit: 'g', householdServingFullText: '2 Tbsp',
+      foodNutrients: [{ nutrientId: 1003, value: 3 }, { nutrientId: 1004, value: 20 }, { nutrientId: 1005, value: 70 }, { nutrientId: 1008, value: 467 }],
+    });
+    check('all-caps names are tidied', usdaBranded.name === 'Greek Yogurt' && usdaBranded.brand === 'Ocean Spray');
+    check('branded serving is first', usdaBranded.portions[0].label === '2 Tbsp (30 g)' && near(usdaBranded.portions[0].factor, 0.3));
+    const usdaDrink = normalizeUsdaFood({
+      fdcId: 4, description: 'Milk', servingSize: 240, servingSizeUnit: 'MLT',
+      foodNutrients: [{ nutrientId: 1003, value: 3 }, { nutrientId: 1004, value: 1 }, { nutrientId: 1005, value: 5 }, { nutrientId: 1008, value: 42 }],
+    });
+    check('drinks use ml', usdaDrink.portions.some((p) => p.label === '100 ml') && !usdaDrink.portions.some((p) => p.label === '100 g'));
+    check('USDA food without nutrition is dropped', normalizeUsdaFood({ fdcId: 5, description: 'Empty', foodNutrients: [] }) === null);
+
+    // --- Open Food Facts ---
+    const offFood = normalizeOffProduct({
+      code: '20047559', product_name: 'Yogurt', brands: 'Pilos, Lidl', serving_size: '100 gram', serving_quantity: 100,
+      nutriments: { 'energy-kcal_100g': 96, proteins_100g: 4.6, carbohydrates_100g: 3.2, fat_100g: 10 },
+    });
+    check('OFF first brand used', offFood.brand === 'Pilos');
+    check('OFF nutrients read', offFood.nutrients.kcal === 96 && offFood.nutrients.fat === 10);
+    const offKj = normalizeOffProduct({ code: '1', product_name: 'X', nutriments: { energy_100g: 418.4, proteins_100g: 1, carbohydrates_100g: 1, fat_100g: 1 } });
+    check('OFF converts kJ when kcal is missing', near(offKj.nutrients.kcal, 100));
+    const offBad = normalizeOffProduct({ code: '2', product_name: 'Bad', nutriments: { 'energy-kcal_100g': 5000 } });
+    check('impossible calorie values are dropped', offBad === null);
+    const offPartial = normalizeOffProduct({ code: '3', product_name: 'Partial', nutriments: { 'energy-kcal_100g': 200, proteins_100g: 5 } });
+    check('missing macros are flagged', offPartial.nutrients.macrosMissing === true && offPartial.nutrients.fat === 0);
+    check('OFF product without a name is dropped', normalizeOffProduct({ code: '4', nutriments: { 'energy-kcal_100g': 100 } }) === null);
+
+    // --- Totals ---
+    const entry = { qty: 2, portionIndex: 0, food: { nutrients: { kcal: 100, protein: 10, carbs: 5, fat: 2 }, portions: [{ label: '100 g', factor: 1.5 }] } };
+    check('entry totals scale by portion and amount', entryTotals(entry).kcal === 300 && entryTotals(entry).protein === 30);
+    check('summing an empty day gives 0', sumEntries([]).kcal === 0);
+
+    // --- Backup and restore ---
+    (async () => {
+      // --- Search retries, using a stand-in for the network ---
+      const realFetch = window.fetch;
+      const fakeFetch = (replies) => {
+        const calls = { count: 0 };
+        window.fetch = async () => {
+          const reply = replies[Math.min(calls.count, replies.length - 1)];
+          calls.count += 1;
+          if (reply === 'network') throw new TypeError('Failed to fetch');
+          return { ok: reply === 200, status: reply, json: async () => ({ fine: true }) };
+        };
+        return calls;
+      };
+      let calls = fakeFetch([400, 200]);
+      check('a one-off error is retried', (await fetchJson('x')).fine && calls.count === 2);
+      calls = fakeFetch(['network', 200]);
+      check('a one-off network failure is retried', (await fetchJson('x')).fine && calls.count === 2);
+      calls = fakeFetch([429, 200]);
+      let limitError = null;
+      await fetchJson('x').catch((e) => { limitError = e; });
+      check('a reached limit is not retried', limitError && limitError.status === 429 && calls.count === 1);
+      calls = fakeFetch([500]);
+      let lastError = null;
+      await fetchJson('x').catch((e) => { lastError = e; });
+      check('it stops after one retry', lastError && calls.count === 2);
+      window.fetch = realFetch;
+
+      await db.delete();
+      await db.open();
+      const food = { key: 'custom:a', source: 'custom', name: 'Oats', brand: '', nutrients: { kcal: 150, protein: 5, carbs: 27, fat: 3 }, portions: [{ label: '1 bowl', factor: 1 }], lastUsed: 1 };
+      await db.foods.put(food);
+      await db.entries.add({ date: '2026-11-01', meal: 'breakfast', foodKey: 'custom:a', qty: 1, portionIndex: 0, food, createdAt: 1 });
+      await db.targets.put({ startDate: '2026-10-01', kcal: 2000, protein: 150, carbs: 200, fat: 60 });
+      await db.targets.put({ startDate: '2026-11-01', kcal: 1900, protein: 150, carbs: 180, fat: 60 });
+      await setSetting('units', 'kg');
+      await setSetting('usdaKey', 'SECRET');
+
+      check('target lookup finds the latest before the day', (await targetsForDate('2026-10-20')).kcal === 2000);
+      check('target lookup on the change day', (await targetsForDate('2026-11-01')).kcal === 1900);
+      check('days before first targets use the first', (await targetsForDate('2026-01-01')).kcal === 2000);
+
+      const backup = JSON.parse(JSON.stringify(await createBackup()));
+      check('USDA key is left out of backups', !JSON.stringify(backup).includes('SECRET'));
+      check('backup validates', validateBackup(backup).entries === 1);
+
+      await db.entries.clear();
+      await db.foods.clear();
+      await setSetting('units', 'lb');
+      await restoreBackup(backup);
+      const restored = await db.entries.toArray();
+      check('entries come back after restore', restored.length === 1 && restored[0].food.name === 'Oats');
+      check('settings come back after restore', (await getSetting('units')) === 'kg');
+      check('USDA key on the phone survives a restore', (await getSetting('usdaKey')) === 'SECRET');
+
+      const throws = (value) => { try { validateBackup(value); return false; } catch { return true; } };
+      check('other files are rejected', throws({ hello: 'world' }));
+      check('newer backups are rejected', throws({ ...backup, schemaVersion: 99 }));
+      const damaged = JSON.parse(JSON.stringify(backup));
+      damaged.data.entries[0].qty = -1;
+      check('damaged backups are rejected', throws(damaged));
+      let refused = false;
+      try { await restoreBackup(damaged); } catch { refused = true; }
+      check('a damaged restore changes nothing', refused && (await db.entries.count()) === 1);
+
+      await db.delete();
+      render();
+    })().catch((error) => { check(`test crash: ${error.message}`, false); render(); });
+
+    function render() {
+      const failed = outcomes.filter((o) => !o.passed).length;
+      document.getElementById('summary').textContent = `${outcomes.length - failed} passed, ${failed} failed`;
+      document.getElementById('summary').className = failed ? 'fail' : 'pass';
+      document.getElementById('results').innerHTML = outcomes
+        .map((o) => `<li class="${o.passed ? 'pass' : 'fail'}">${o.passed ? 'PASS' : 'FAIL'}: ${o.name}</li>`)
+        .join('');
+    }
+  </script>
+</body>
+</html>

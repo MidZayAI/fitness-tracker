@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Fitness Tracker</title>
+  <meta name="description" content="Personal food and workout tracker">
+  <meta name="theme-color" content="#f5f6f4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14171a" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="app.css">
+  <script defer src="lib/dexie.min.js"></script>
+  <script defer src="js/nutrition.js"></script>
+  <script defer src="js/foodApi.js"></script>
+  <script defer src="js/db.js"></script>
+  <script defer src="js/app.js"></script>
+  <script defer src="lib/alpine.min.js"></script>
+</head>
+<body x-data="app()" x-cloak>
+  <input type="file" id="restore-file" class="visually-hidden" accept=".json,application/json" @change="chooseRestoreFile($event)">
+
+  <p class="load-error" x-show="loadError" x-text="loadError"></p>
+
+  <!-- ==================== First-run setup, also used to recalculate targets ==================== -->
+  <main class="screen setup" x-show="ready && (!hasTargets || sheet === 'setup')">
+    <header class="sheet-header" x-show="hasTargets">
+      <button class="icon-button" type="button" aria-label="Close" @click="closeSheet()">✕</button>
+      <h2>Recalculate targets</h2>
+    </header>
+    <p class="step-label" x-text="`Step ${setup.step} of 4`"></p>
+
+    <section x-show="setup.step === 1">
+      <h1 x-show="!hasTargets">Welcome</h1>
+      <h1 x-show="hasTargets">Units</h1>
+      <p class="muted" x-show="!hasTargets">Let's set your daily calorie and macro targets. Everything stays on this phone, with no account needed.</p>
+      <h3>Which units do you use?</h3>
+      <div class="segmented" role="group" aria-label="Units">
+        <button type="button" :class="{ on: setup.units === 'lb' }" @click="setup.units = 'lb'">lb, ft, in</button>
+        <button type="button" :class="{ on: setup.units === 'kg' }" @click="setup.units = 'kg'">kg, cm</button>
+      </div>
+      <button class="button primary wide" type="button" @click="setupNext()">Continue</button>
+      <div class="restore-offer" x-show="!hasTargets">
+        <p class="muted">Already have a backup file from this app?</p>
+        <label class="button wide" for="restore-file">Restore from backup</label>
+        <p class="error" x-show="restoreError" x-text="restoreError"></p>
+      </div>
+    </section>
+
+    <section x-show="setup.step === 2">
+      <h1>About you</h1>
+      <p class="muted">These numbers estimate how many calories you burn in a day.</p>
+      <h3>Calorie formula</h3>
+      <p class="hint">The standard formula has different versions for male and female bodies.</p>
+      <div class="segmented" role="group" aria-label="Calorie formula">
+        <button type="button" :class="{ on: setup.sex === 'male' }" @click="setup.sex = 'male'">Male</button>
+        <button type="button" :class="{ on: setup.sex === 'female' }" @click="setup.sex = 'female'">Female</button>
+        <button type="button" :class="{ on: setup.sex === 'average' }" @click="setup.sex = 'average'">Average</button>
+      </div>
+      <label class="field">Age
+        <input type="number" inputmode="numeric" min="18" max="100" x-model="setup.age">
+      </label>
+      <template x-if="setup.units === 'lb'">
+        <div class="field-row">
+          <label class="field">Height (ft)
+            <input type="number" inputmode="numeric" min="3" max="8" x-model="setup.feet">
+          </label>
+          <label class="field">Height (in)
+            <input type="number" inputmode="numeric" min="0" max="11" x-model="setup.inches">
+          </label>
+        </div>
+      </template>
+      <template x-if="setup.units === 'kg'">
+        <label class="field">Height (cm)
+          <input type="number" inputmode="decimal" min="120" max="250" x-model="setup.cm">
+        </label>
+      </template>
+      <label class="field"><span x-text="`Weight (${setup.units})`"></span>
+        <input type="number" inputmode="decimal" step="any" x-model="setup.weight">
+      </label>
+      <p class="error" x-show="setup.error" x-text="setup.error"></p>
+      <div class="button-row">
+        <button class="button" type="button" @click="setupBack()">Back</button>
+        <button class="button primary" type="button" @click="setupNext()">Continue</button>
+      </div>
+    </section>
+
+    <section x-show="setup.step === 3">
+      <h1>Activity and pace</h1>
+      <h3>How active is a normal week?</h3>
+      <div class="choice-list">
+        <template x-for="level in ACTIVITY_LEVELS" :key="level.id">
+          <button type="button" class="choice" :class="{ on: setup.activity === level.id }" @click="setup.activity = level.id">
+            <strong x-text="level.label"></strong><span x-text="level.hint"></span>
+          </button>
+        </template>
+      </div>
+      <h3>Fat-loss pace</h3>
+      <div class="choice-list">
+        <template x-for="pace in FAT_LOSS_PACES" :key="pace.id">
+          <button type="button" class="choice" :class="{ on: setup.pace === pace.id }" @click="setup.pace = pace.id">
+            <strong x-text="pace.label"></strong><span x-text="pace.hint"></span>
+          </button>
+        </template>
+      </div>
+      <div class="button-row">
+        <button class="button" type="button" @click="setupBack()">Back</button>
+        <button class="button primary" type="button" @click="setupNext()">See my targets</button>
+      </div>
+    </section>
+
+    <section x-show="setup.step === 4">
+      <h1>Your daily targets</h1>
+      <template x-if="setup.suggestion">
+        <p class="muted">Estimated maintenance is about <strong x-text="`${setup.suggestion.maintenance} kcal`"></strong> a day. Change any number below.</p>
+      </template>
+      <template x-if="setup.suggestion && setup.suggestion.raisedToFloor">
+        <p class="notice">The formula gave a very low number, so this suggestion was raised to a safer minimum.</p>
+      </template>
+      <div class="target-grid">
+        <label class="field">Calories (kcal)<input type="number" inputmode="numeric" x-model="setup.kcal"></label>
+        <label class="field">Protein (g)<input type="number" inputmode="numeric" x-model="setup.protein"></label>
+        <label class="field">Carbs (g)<input type="number" inputmode="numeric" x-model="setup.carbs"></label>
+        <label class="field">Fat (g)<input type="number" inputmode="numeric" x-model="setup.fat"></label>
+      </div>
+      <p class="hint">These are estimates and a starting point, not medical advice. Adjust them based on how your weight trends over a few weeks, and check with a doctor if you have a health condition, are pregnant or have a history of eating disorders.</p>
+      <p class="error" x-show="setup.error" x-text="setup.error"></p>
+      <div class="button-row">
+        <button class="button" type="button" @click="setupBack()">Back</button>
+        <button class="button primary" type="button" @click="finishSetup()">Save targets</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- ==================== Main tabs ==================== -->
+  <div x-show="ready && hasTargets && !sheet">
+    <main class="screen with-nav" x-show="tab === 'diary'">
+      <header class="date-bar">
+        <button class="icon-button" type="button" aria-label="Previous day" @click="shiftDate(-1)">‹</button>
+        <label class="date-title">
+          <strong x-text="dateTitle"></strong>
+          <span x-text="dateSubtitle"></span>
+          <input type="date" aria-label="Choose a date" class="date-input" :value="date" @change="goToDate($event.target.value)">
+        </label>
+        <button class="icon-button" type="button" aria-label="Next day" @click="shiftDate(1)">›</button>
+      </header>
+      <button class="link today-link" type="button" x-show="!isToday" @click="goToDate(todayCache)">Back to today</button>
+
+      <button class="banner warn" type="button" x-show="backupDue" @click="tab = 'settings'">
+        It's been a while since your last backup. Tap to save one.
+      </button>
+
+      <section class="card summary" x-show="target">
+        <div class="summary-top">
+          <div>
+            <div class="big-number" :class="{ over: kcalLeft < 0 }" x-text="Math.abs(kcalLeft).toLocaleString()"></div>
+            <div class="muted" x-text="kcalLeft < 0 ? 'kcal over target' : 'kcal left'"></div>
+          </div>
+          <div class="summary-side">
+            <strong x-text="round(totals.kcal).toLocaleString()"></strong> eaten<br>
+            <strong x-text="target ? round(target.kcal).toLocaleString() : ''"></strong> target
+          </div>
+        </div>
+        <div class="bar"><span class="fill kcal" :class="{ over: kcalLeft < 0 }" :style="`width:${percent(totals.kcal, target && target.kcal)}%`"></span></div>
+        <div class="macros">
+          <template x-for="macro in macroRows()" :key="macro.id">
+            <div class="macro">
+              <div class="macro-label" x-text="macro.label"></div>
+              <div class="macro-value"><strong x-text="round(macro.value)"></strong><span x-text="` / ${round(macro.goal)} g`"></span></div>
+              <div class="bar small"><span class="fill" :class="macro.id" :style="`width:${percent(macro.value, macro.goal)}%`"></span></div>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <template x-for="meal in MEALS" :key="meal.id">
+        <section class="card meal">
+          <header class="meal-header">
+            <h2 x-text="meal.label"></h2>
+            <span class="muted" x-show="mealEntries(meal.id).length" x-text="`${mealCalories(meal.id)} kcal`"></span>
+          </header>
+          <template x-for="entry in mealEntries(meal.id)" :key="entry.id">
+            <button class="row" type="button" @click="openEntry(entry)">
+              <span class="row-main">
+                <strong x-text="entry.food.name"></strong>
+                <span class="muted" x-text="entryAmount(entry)"></span>
+              </span>
+              <span class="row-value" x-text="entryCalories(entry)"></span>
+            </button>
+          </template>
+          <button class="add-button" type="button" @click="openAddFood(meal.id)">+ Add food</button>
+        </section>
+      </template>
+    </main>
+
+    <main class="screen with-nav" x-show="tab === 'settings'">
+      <h1>Settings</h1>
+
+      <section class="card">
+        <h2>Daily targets</h2>
+        <template x-if="target">
+          <p class="muted" x-text="`${round(target.kcal)} kcal · ${round(target.protein)} g protein · ${round(target.carbs)} g carbs · ${round(target.fat)} g fat`"></p>
+        </template>
+        <div class="button-row">
+          <button class="button" type="button" @click="openTargetEditor()">Edit numbers</button>
+          <button class="button" type="button" @click="startRecalculate()">Recalculate</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Units</h2>
+        <div class="segmented" role="group" aria-label="Units">
+          <button type="button" :class="{ on: units === 'lb' }" @click="setUnits('lb')">lb, ft, in</button>
+          <button type="button" :class="{ on: units === 'kg' }" @click="setUnits('kg')">kg, cm</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Backup</h2>
+        <p class="muted">Your data lives only on this phone. Clearing Chrome's site data or uninstalling the app erases it, so save a backup regularly and copy the file somewhere safe, such as Google Drive.</p>
+        <p class="muted" x-text="lastBackupLabel"></p>
+        <button class="button primary wide" type="button" @click="downloadBackup()">Save backup file</button>
+        <label class="button wide" for="restore-file">Restore from backup</label>
+        <p class="error" x-show="restoreError" x-text="restoreError"></p>
+        <p class="hint" x-show="storagePersisted === true">This phone has agreed to protect the app's data when storage runs low.</p>
+      </section>
+
+      <section class="card">
+        <h2>Food search key</h2>
+        <p class="muted" x-show="!usdaKey">You're using a shared test key with a very low limit. A free personal key takes about two minutes to get.</p>
+        <p class="muted" x-show="usdaKey">Your personal USDA key is saved on this phone. It isn't included in backup files.</p>
+        <a class="link" href="https://fdc.nal.usda.gov/api-key-signup/" target="_blank" rel="noopener">Get a free USDA key</a>
+        <label class="field">USDA key
+          <input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" x-model="usdaKeyDraft">
+        </label>
+        <button class="button wide" type="button" @click="saveUsdaKey()">Save key</button>
+      </section>
+
+      <section class="card" x-show="installPrompt && !installed">
+        <h2>Install</h2>
+        <p class="muted">Add this app to your home screen.</p>
+        <button class="button primary wide" type="button" @click="promptInstall()">Install app</button>
+      </section>
+
+      <p class="hint center" x-text="`Version ${APP_VERSION}. Food data: USDA FoodData Central and Open Food Facts.`"></p>
+    </main>
+
+    <nav class="tabbar" aria-label="Main">
+      <button type="button" :class="{ on: tab === 'diary' }" @click="tab = 'diary'">Diary</button>
+      <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">Settings</button>
+    </nav>
+  </div>
+
+  <!-- ==================== Add food ==================== -->
+  <main class="screen" x-show="sheet === 'add'">
+    <header class="sheet-header">
+      <button class="icon-button" type="button" aria-label="Close" @click="closeSheet()">✕</button>
+      <h2>Add food</h2>
+    </header>
+    <form class="search" @submit.prevent="$refs.search.blur(); runSearch()">
+      <input type="search" x-ref="search" placeholder="Search foods" aria-label="Search foods" enterkeyhint="search" x-model="query" @input="searched = false">
+      <button class="button primary" type="submit" :disabled="!query.trim()">Search</button>
+    </form>
+    <button class="button wide" type="button" @click="openCustomFood()">+ Create your own food</button>
+
+    <p class="notice" x-show="!online">You're offline. Your saved foods still work.</p>
+    <p class="notice" x-show="online && !usdaKey && searched">Searching with a shared test key. Add your free key in Settings to avoid limits.</p>
+
+    <section x-show="matchingSavedFoods.length">
+      <h3 x-text="query.trim() ? 'Your foods' : 'Recent'"></h3>
+      <div class="card list">
+        <template x-for="food in matchingSavedFoods" :key="food.key">
+          <button class="row" type="button" @click="openFood(food, true)">
+            <span class="row-main">
+              <strong x-text="food.name"></strong>
+              <span class="muted" x-text="[food.brand, foodCaloriesLabel(food)].filter(Boolean).join(' · ')"></span>
+            </span>
+          </button>
+        </template>
+      </div>
+    </section>
+
+    <p class="muted center" x-show="searching">Searching…</p>
+    <template x-for="message in results.errors" :key="message">
+      <p class="error" x-text="message"></p>
+    </template>
+
+    <section x-show="results.general.length">
+      <h3>General foods</h3>
+      <div class="card list">
+        <template x-for="food in results.general" :key="food.key">
+          <button class="row" type="button" @click="openFood(food)">
+            <span class="row-main">
+              <strong x-text="food.name"></strong>
+              <span class="muted" x-text="foodCaloriesLabel(food)"></span>
+            </span>
+          </button>
+        </template>
+      </div>
+    </section>
+
+    <section x-show="results.branded.length">
+      <h3>Brands and packaged foods</h3>
+      <div class="card list">
+        <template x-for="food in results.branded" :key="food.key">
+          <button class="row" type="button" @click="openFood(food)">
+            <span class="row-main">
+              <strong x-text="food.name"></strong>
+              <span class="muted" x-text="[food.brand, foodCaloriesLabel(food)].filter(Boolean).join(' · ')"></span>
+            </span>
+          </button>
+        </template>
+      </div>
+    </section>
+
+    <p class="muted center" x-show="searched && !searching && !results.general.length && !results.branded.length && !results.errors.length">
+      No matches. Try fewer words, or create your own food.
+    </p>
+    <p class="muted center" x-show="!query.trim() && !savedFoods.length">Search for a food to log your first meal.</p>
+  </main>
+
+  <!-- ==================== Portion and entry editor ==================== -->
+  <main class="screen" x-show="sheet === 'portion'">
+    <template x-if="form">
+      <div>
+        <header class="sheet-header">
+          <button class="icon-button" type="button" aria-label="Back" @click="closeSheet()">‹</button>
+          <h2 x-text="form.mode === 'edit' ? 'Edit entry' : 'Add food'"></h2>
+        </header>
+        <h1 class="food-title" x-text="form.food.name"></h1>
+        <p class="muted" x-text="[form.food.brand, SOURCE_LABELS[form.food.source]].filter(Boolean).join(' · ')"></p>
+        <p class="notice" x-show="form.food.nutrients.macrosMissing">This food is missing some macro data, so those values count as 0.</p>
+
+        <div class="field-row">
+          <label class="field qty">Amount
+            <input type="number" inputmode="decimal" step="any" min="0" x-model="form.qty">
+          </label>
+          <label class="field grow">Portion
+            <select x-model.number="form.portionIndex">
+              <template x-for="(portion, i) in form.food.portions" :key="i">
+                <option :value="i" :selected="i === Number(form.portionIndex)" x-text="portion.label"></option>
+              </template>
+            </select>
+          </label>
+        </div>
+        <label class="field">Meal
+          <select x-model="form.meal">
+            <template x-for="meal in MEALS" :key="meal.id">
+              <option :value="meal.id" :selected="meal.id === form.meal" x-text="meal.label"></option>
+            </template>
+          </select>
+        </label>
+
+        <div class="card totals">
+          <div><strong x-text="round(formTotals.kcal)"></strong><span>kcal</span></div>
+          <div><strong x-text="`${round(formTotals.protein)} g`"></strong><span>Protein</span></div>
+          <div><strong x-text="`${round(formTotals.carbs)} g`"></strong><span>Carbs</span></div>
+          <div><strong x-text="`${round(formTotals.fat)} g`"></strong><span>Fat</span></div>
+        </div>
+
+        <p class="error" x-show="form.error" x-text="form.error"></p>
+        <button class="button primary wide" type="button" @click="saveEntry()" x-text="form.mode === 'edit' ? 'Save changes' : 'Add to diary'"></button>
+        <button class="button danger wide" type="button" x-show="form.mode === 'edit'" @click="deleteEntry()">Remove entry</button>
+        <button class="button wide" type="button" x-show="form.mode === 'new' && form.food.source === 'custom'" @click="editCustomFood()">Edit this food</button>
+        <button class="link center-link" type="button" x-show="form.mode === 'new' && form.saved" @click="forgetFood()">Remove from your foods</button>
+      </div>
+    </template>
+  </main>
+
+  <!-- ==================== Custom food ==================== -->
+  <main class="screen" x-show="sheet === 'custom'">
+    <header class="sheet-header">
+      <button class="icon-button" type="button" aria-label="Back" @click="closeSheet()">‹</button>
+      <h2 x-text="custom.key ? 'Edit food' : 'Create food'"></h2>
+    </header>
+    <label class="field">Name<input type="text" x-model="custom.name"></label>
+    <label class="field">Brand (optional)<input type="text" x-model="custom.brand"></label>
+    <div class="field-row">
+      <label class="field grow">Serving name<input type="text" x-model="custom.servingLabel"></label>
+      <label class="field qty">Grams (optional)<input type="number" inputmode="decimal" step="any" min="0" x-model="custom.grams"></label>
+    </div>
+    <h3>Nutrition per serving</h3>
+    <div class="target-grid">
+      <label class="field">Calories (kcal)<input type="number" inputmode="decimal" step="any" min="0" x-model="custom.kcal"></label>
+      <label class="field">Protein (g)<input type="number" inputmode="decimal" step="any" min="0" x-model="custom.protein"></label>
+      <label class="field">Carbs (g)<input type="number" inputmode="decimal" step="any" min="0" x-model="custom.carbs"></label>
+      <label class="field">Fat (g)<input type="number" inputmode="decimal" step="any" min="0" x-model="custom.fat"></label>
+    </div>
+    <p class="error" x-show="custom.error" x-text="custom.error"></p>
+    <button class="button primary wide" type="button" @click="saveCustomFood()">Save food</button>
+  </main>
+
+  <!-- ==================== Edit target numbers ==================== -->
+  <main class="screen" x-show="sheet === 'targets'">
+    <header class="sheet-header">
+      <button class="icon-button" type="button" aria-label="Back" @click="closeSheet()">‹</button>
+      <h2>Edit targets</h2>
+    </header>
+    <p class="muted">New targets apply from today onward. Earlier days keep the targets they had.</p>
+    <div class="target-grid">
+      <label class="field">Calories (kcal)<input type="number" inputmode="numeric" x-model="targetForm.kcal"></label>
+      <label class="field">Protein (g)<input type="number" inputmode="numeric" x-model="targetForm.protein"></label>
+      <label class="field">Carbs (g)<input type="number" inputmode="numeric" x-model="targetForm.carbs"></label>
+      <label class="field">Fat (g)<input type="number" inputmode="numeric" x-model="targetForm.fat"></label>
+    </div>
+    <p class="hint" x-text="`Your macros add up to ${round(macroCalories({ protein: Number(targetForm.protein) || 0, carbs: Number(targetForm.carbs) || 0, fat: Number(targetForm.fat) || 0 }))} kcal.`"></p>
+    <p class="error" x-show="targetForm.error" x-text="targetForm.error"></p>
+    <button class="button primary wide" type="button" @click="saveTargetForm()">Save targets</button>
+  </main>
+
+  <!-- ==================== Overlays ==================== -->
+  <div class="modal-backdrop" x-show="pendingRestore">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title">
+      <h2 id="restore-title">Replace all data on this phone?</h2>
+      <template x-if="pendingRestore">
+        <p class="muted" x-text="`This backup is from ${pendingRestoreDate}, with ${pendingRestore.counts.entries} diary entries and ${pendingRestore.counts.foods} saved foods. Everything now on this phone will be replaced.`"></p>
+      </template>
+      <div class="button-row">
+        <button class="button" type="button" @click="pendingRestore = null">Cancel</button>
+        <button class="button primary" type="button" @click="confirmRestore()">Replace</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" role="status" x-show="toast">
+    <span x-text="toast && toast.message"></span>
+    <button class="link" type="button" x-show="toast && !!toast.undo" @click="toast.undo()">Undo</button>
+  </div>
+
+  <button class="update-pill" type="button" x-show="swWaiting" @click="applyUpdate()">Update ready. Tap to refresh</button>
+</body>
+</html>
